@@ -1,21 +1,62 @@
 // Imports the express Node module.
 var express = require('express');
-var database = require('./database');
-var readDocument = database.readDocument
 // Creates an Express server.
 var app = express();
 
-
-// You run the server from `server`, so `../client/build` is `server/../client/build`.
-// '..' means "go up one directory", so this translates into `client/build`!
 app.use(express.static('../client/build'));
+var StatusUpdateSchema = require('./schemas/statusupdate.json');
+var validate = require('express-jsonschema').validate;
+//Import readDocument from database.
+var database = require('./database');
+var readDocument = database.readDocument;
+var writeDocument = database.writeDocument;
+var addDocument = database.addDocument;
 
-// Defines what happens when it receives the `GET /` request
 
-// Starts the server on port 3000!
-app.listen(3000, function () {
-  console.log('Example app listening on port 3000!');
-});
+var bodyParser = require('body-parser');
+app.use(bodyParser.text());
+app.use(bodyParser.json());
+
+/**
+ * Adds a new status update to the database.
+ */
+function postStatusUpdate(user, location, contents) {
+  // If we were implementing this for real on an actual server, we would check
+  // that the user ID is correct & matches the authenticated user. But since
+  // we're mocking it, we can be less strict.
+
+  // Get the current UNIX time.
+  var time = new Date().getTime();
+  // The new status update. The database will assign the ID for us.
+  var newStatusUpdate = {
+    "likeCounter": [],
+    "type": "statusUpdate",
+    "contents": {
+      "author": user,
+      "postDate": time,
+      "location": location,
+      "contents": contents,
+      "likeCounter": []
+    },
+    // List of comments on the post
+    "comments": []
+  };
+
+  // Add the status update to the database.
+  // Returns the status update w/ an ID assigned.
+  newStatusUpdate = addDocument('feedItems', newStatusUpdate);
+
+  // Add the status update reference to the front of the current user's feed.
+  var userData = readDocument('users', user);
+  var feedData = readDocument('feeds', userData.feed);
+  feedData.contents.unshift(newStatusUpdate._id);
+
+  // Update the feed object.
+  writeDocument('feeds', feedData);
+
+  // Return the newly-posted object.
+  return newStatusUpdate;
+}
 
 /**
  * Resolves a feed item. Internal to the server, since it's synchronous.
@@ -28,7 +69,8 @@ function getFeedItemSync(feedItemId) {
   // Assuming a StatusUpdate. If we had other types of
   // FeedItems in the DB, we would
   // need to check the type and have logic for each type.
-  feedItem.contents.author = readDocument('users', feedItem.contents.author);
+  feedItem.contents.author = readDocument('users',
+feedItem.contents.author);
   // Resolve comment author.
   feedItem.comments.forEach((comment) => {
     comment.author = readDocument('users', comment.author);
@@ -48,9 +90,6 @@ function getFeedData(user) {
   // Return FeedData with resolved references.
   return feedData;
 }
-
-
-
 
 /**
  * Get the user ID from a token. Returns -1 (an invalid ID)
@@ -94,4 +133,22 @@ app.get('/user/:userid/feed', function(req, res) {
     // 401: Unauthorized request.
     res.status(401).end();
   }
+});
+
+/**
+ * Translate JSON Schema Validation failures into error 400s.
+ */
+app.use(function(err, req, res, next) {
+  if (err.name === 'JsonSchemaValidation') {
+    // Set a bad request http response status
+    res.status(400).end();
+  } else {
+    // It's some other sort of error; pass it to next error middleware handler
+    next(err);
+  }
+});
+
+// Starts the server on port 3000!
+app.listen(3000, function () {
+  console.log('Example app listening on port 3000!');
 });
